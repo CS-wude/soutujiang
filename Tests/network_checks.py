@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,10 +15,32 @@ with tempfile.TemporaryDirectory(prefix="feishu-image-tests-") as folder:
     subprocess.run(["swift", "run", "CoreChecks"], cwd=ROOT, env=env, check=True)
 
     class Handler(http.server.BaseHTTPRequestHandler):
+        meme_counts = {}
         def log_message(self, *args):
             pass
 
         def do_GET(self):
+            if self.path.startswith("/meme-"):
+                self.meme_counts[self.path] = self.meme_counts.get(self.path, 0) + 1
+                count = self.meme_counts[self.path]
+                image = {"title_zh": f"reply {count}", "url": "https://images.example/test.gif", "kind": "gif"}
+                body = {"data": [image]}
+                status = 200
+                if self.path == "/meme-rate":
+                    status, body = 429, {"error": "rate_limited"}
+                elif self.path == "/meme-credit":
+                    status, body = 402, {"error": "insufficient_credits"}
+                elif self.path == "/meme-invalid":
+                    body = {"data": "wrong shape"}
+                elif self.path == "/meme-empty" and count == 1:
+                    body = {"data": []}
+                data = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if self.path == "/redirect":
                 self.send_response(302)
                 self.send_header("Location", "/png")

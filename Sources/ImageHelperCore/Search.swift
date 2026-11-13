@@ -4,18 +4,23 @@ public enum SearchCategory: Int, CaseIterable {
     case stickers, gif, pictures
 }
 public enum SearchProvider: Int, CaseIterable {
-    case bing, baidu
+    case bing, baidu, memecub
+}
+public enum SearchOrder: Int, CaseIterable {
+    case relevance, popular, newest
 }
 public struct SearchRequest {
     public let keyword: String
     public let category: SearchCategory
     public let provider: SearchProvider
-    public init(keyword: String, category: SearchCategory, provider: SearchProvider) {
+    public let order: SearchOrder
+    public init(keyword: String, category: SearchCategory, provider: SearchProvider, order: SearchOrder = .relevance) {
         self.keyword = keyword; self.category = category; self.provider = provider
+        self.order = order
     }
     public var url: URL? {
         let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty || (provider == .memecub && order != .relevance) else { return nil }
         let suffix: String
         switch category {
         case .stickers: suffix = " 表情包"
@@ -25,6 +30,18 @@ public struct SearchRequest {
         var parts = URLComponents()
         parts.scheme = "https"
         switch provider {
+        case .memecub:
+            parts.host = "memecub.com"; parts.path = "/api/v1/search"
+            parts.queryItems = [URLQueryItem(name: "q", value: trimmed), URLQueryItem(name: "limit", value: "40")]
+            if category == .pictures {
+                parts.queryItems?.append(URLQueryItem(name: "kind", value: "photo"))
+            } else {
+                parts.queryItems?.append(URLQueryItem(name: "category", value: "cn-memes"))
+                if category == .gif { parts.queryItems?.append(URLQueryItem(name: "kind", value: "gif")) }
+            }
+            if order != .relevance {
+                parts.queryItems?.append(URLQueryItem(name: "sort", value: order == .popular ? "popular" : "newest"))
+            }
         case .bing:
             parts.host = "www.bing.com"; parts.path = "/images/search"
             parts.queryItems = [URLQueryItem(name: "q", value: trimmed + suffix),

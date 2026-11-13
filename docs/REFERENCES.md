@@ -11,3 +11,5 @@
 - [飞书即时消息功能更新日志](https://www.feishu.cn/hc/zh-CN/articles/360049067485)：官方说明图片和视频可拖拽或粘贴到输入框。具体客户端与 GIF 行为仍需实测。
 
 搜索结果来自必应／百度公开网页。结果、验证机制、原图站点可达性会随网站改变；工具保留网页原有操作和浏览器打开入口。
+
+v1.1 的表情／热梗首选来源改为 [memecub REST API](https://memecub.com/developers)，参考其[公开项目说明](https://github.com/liyupi/memecub)。使用公开免密钥额度；不安装该项目的 Skill 或 MCP，不复制其源码。服务限额与更详细的图源比较见 [MEME-SOURCES.md](MEME-SOURCES.md)。

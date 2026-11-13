@@ -15,7 +15,9 @@ private struct SearchImage {
     let thumbnail: URL
     let title: String
     let source: URL
-    var json: [String: String] { ["url": url.absoluteString, "thumbnail": thumbnail.absoluteString, "title": title] }
+    var sourceName = "通用搜索"
+    var kind = ""
+    var json: [String: String] { ["url": url.absoluteString, "thumbnail": thumbnail.absoluteString, "title": title, "sourceName": sourceName, "kind": kind] }
 }
 
 final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
@@ -25,8 +27,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
     private var statusItem: NSStatusItem!
     private var hotKey: GlobalHotKey!
     private let field = NSSearchField()
-    private let category = NSSegmentedControl(labels: ["表情包", "GIF 动图", "普通图片"], trackingMode: .selectOne, target: nil, action: nil)
+    private let category = NSSegmentedControl(labels: ["表情 / 热梗", "GIF 动图", "普通图片"], trackingMode: .selectOne, target: nil, action: nil)
     private let provider = NSPopUpButton()
+    private let order = NSPopUpButton()
+    private let providers: [SearchProvider] = [.memecub, .bing, .baidu]
+    private let memeClient = MemeSearchClient()
+    private var apiTask: URLSessionDataTask?
+    private var previousCategory: SearchCategory = .stickers
+    private var lastProvider: SearchProvider = .memecub
     private let status = NSTextField(wrappingLabelWithString: "")
     private let shortcut = NSTextField(labelWithString: "⌃⌥ 空格 · 随时唤出")
     private var permissionButton: NSButton!
@@ -122,12 +130,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         let searchButton = button("搜索", #selector(search(_:))); searchButton.bezelColor = .systemGreen
         let searchRow = NSStackView(views: [field, searchButton]); searchRow.spacing = 10
         category.selectedSegment = 0; category.target = self; category.action = #selector(changeFilter(_:))
-        provider.addItems(withTitles: ["必应图片", "百度图片"]); provider.target = self; provider.action = #selector(changeFilter(_:))
+        provider.addItems(withTitles: ["梗图库 · 免费 20 次/天/IP", "必应图片", "百度图片"]); provider.target = self; provider.action = #selector(changeFilter(_:))
+        provider.toolTip = "梗图库使用 memecub，免密钥额度为每个 IP 每天 20 次搜索；命中本地缓存不消耗搜索次数。"
         permissionButton = button("开启一键粘贴", #selector(permission(_:)))
         let filters = NSStackView(views: [category, provider, NSView(), permissionButton]); filters.spacing = 10
-        let hint = NSTextField(labelWithString: "点图片 → 放入飞书输入框 · 发送由你确认")
-        hint.font = .systemFont(ofSize: 12); hint.textColor = .secondaryLabelColor
-        let tools = NSStackView(views: [hint, NSView(), button("重试搜索", #selector(retry(_:))), button("在浏览器打开", #selector(browser(_:))), button("帮助", #selector(help(_:)))])
+        order.addItems(withTitles: ["相关优先", "图源热门", "最新收录"])
+        order.target = self; order.action = #selector(changeFilter(_:))
+        let tools = NSStackView(views: [button("图库热门", #selector(popular(_:))), order, NSView(), button("重试搜索", #selector(retry(_:))), button("在浏览器打开", #selector(browser(_:))), button("帮助", #selector(help(_:)))])
         tools.spacing = 8
         status.font = .systemFont(ofSize: 12); status.maximumNumberOfLines = 2
         status.heightAnchor.constraint(equalToConstant: 34).isActive = true
@@ -139,7 +148,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         for row in rows { row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         if let url = resource("grid", "html") { grid.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent()) }
         updatePermissionButton()
-        message("先在飞书点一下聊天输入框，再用 ⌃⌥空格打开搜图酱。首次使用可开启一键粘贴。")
+        message("表情和热梗默认直连梗图库。免密钥每 IP 每天 20 次；重复查询有缓存。可点“图库热门”浏览。")
     }
     private func resource(_ name: String, _ ext: String) -> URL? { resources.url(forResource: name, withExtension: ext, subdirectory: "Resources") }
     private func render(_ function: String, _ value: Any = "") {
@@ -151,7 +160,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         guard permissionButton != nil else { return }
         permissionButton.title = DraftInserter.hasPermission ? "一键粘贴已开启 ✓" : "开启一键粘贴"
     }
-    @objc func showWindow(_ sender: Any?) { cancelTransfer(); NSApp.activate(ignoringOtherApps: true); panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(field); updatePermissionButton() }
+    @objc func showWindow(_ sender: Any?) {
+        cancelTransfer()
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? panel.screen ?? NSScreen.main
+        if let screen { panel.setFrame(WindowPlacement.constrained(panel.frame, to: screen.visibleFrame), display: false) }
+        NSApp.activate(ignoringOtherApps: true); panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(field); updatePermissionButton()
+    }
     @objc private func toggle(_ sender: Any?) { cancelTransfer(); if panel.isVisible { panel.orderOut(nil) } else { showWindow(nil) } }
     @objc private func focusSearch(_ sender: Any?) { panel.makeFirstResponder(field) }
     func windowShouldClose(_ sender: NSWindow) -> Bool { cancelTransfer(); sender.orderOut(nil); return false }
@@ -164,18 +178,71 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         alert.beginSheetModal(for: panel) { response in if response == .alertFirstButtonReturn { DraftInserter.requestPermission() } }
     }
     private func cancelTransfer() { operation = UUID(); transfer?.cancel(); transfer = nil }
+    private var selectedProvider: SearchProvider {
+        providers.indices.contains(provider.indexOfSelectedItem) ? providers[provider.indexOfSelectedItem] : .memecub
+    }
     @objc private func search(_ sender: Any?) {
         let kind = SearchCategory(rawValue: category.selectedSegment) ?? .stickers
-        let request = SearchRequest(keyword: field.stringValue, category: kind, provider: SearchProvider(rawValue: provider.indexOfSelectedItem) ?? .bing)
+        let source = selectedProvider
+        let sorting = SearchOrder(rawValue: order.indexOfSelectedItem) ?? .relevance
+        let request = SearchRequest(keyword: field.stringValue, category: kind, provider: source, order: sorting)
         guard let url = request.url else { message("先输入关键词，再按回车搜索。"); focusSearch(nil); return }
-        cancelTransfer(); searchToken = UUID(); loadedToken = nil; images = []; activeCategory = kind
+        if source == .memecub, apiTask != nil, lastProvider == .memecub, lastSearchURL == url {
+            message("相同搜索正在进行中，继续等待即可；不会重复消耗搜索额度。")
+            return
+        }
+        cancelTransfer(); apiTask?.cancel(); apiTask = nil; activeNavigation = nil; searchPage.stopLoading()
+        searchToken = UUID(); loadedToken = nil; images = []; activeCategory = kind; lastProvider = source
         lastSearchURL = url; render("showLoading"); message("正在找图…")
-        activeNavigation = searchPage.load(URLRequest(url: url, timeoutInterval: 35))
+        if source == .memecub {
+            let token = searchToken
+            let maxAge: TimeInterval = sorting == .relevance ? 24 * 3600 : 15 * 60
+            apiTask = memeClient.fetch(url: url, maxAge: maxAge) { [weak self] result in
+                guard let self, token == self.searchToken else { return }
+                self.apiTask = nil; self.loadedToken = token
+                switch result {
+                case .failure(let error):
+                    let text = (error is MemeServiceError) ? error.localizedDescription : "梗图库连接失败：\(error.localizedDescription)。可重试或手动切换必应图片。"
+                    self.render("showNotice", text); self.message(text, error: true)
+                case .success(let page):
+                    let items = kind == .gif ? page.images.filter { $0.kind == "gif" } : page.images
+                    self.images = items.map { SearchImage(url: $0.url, thumbnail: $0.thumbnail, title: $0.title,
+                                                         source: $0.source, sourceName: "memecub 梗图库", kind: $0.kind) }
+                    guard !self.images.isEmpty else {
+                        let text = "梗图库暂无匹配结果。可换个梗名或情绪词，也可手动切换必应图片。"
+                        self.render("showNotice", text); self.message(text); return
+                    }
+                    let caption = "\(self.images.count) 张梗图 · memecub · \(page.isCached ? "本地缓存，不消耗本次搜索额度" : "图源返回，免密钥每 IP 每天 20 次")"
+                    self.render("renderResults", ["items": self.images.map(\.json), "generation": token.uuidString, "caption": caption])
+                    self.message(caption + "。点击图片放入飞书草稿，发送由你确认。")
+                }
+            }
+        } else { activeNavigation = searchPage.load(URLRequest(url: url, timeoutInterval: 35)) }
     }
-    @objc private func changeFilter(_ sender: Any?) { if !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { search(nil) } }
+    @objc private func changeFilter(_ sender: Any?) {
+        let kind = SearchCategory(rawValue: category.selectedSegment) ?? .stickers
+        if kind == .pictures && selectedProvider == .memecub { provider.selectItem(at: 1) }
+        else if sender as? NSSegmentedControl === category, previousCategory == .pictures, kind != .pictures { provider.selectItem(at: 0) }
+        previousCategory = kind
+        order.isEnabled = selectedProvider == .memecub
+        if !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (selectedProvider == .memecub && order.indexOfSelectedItem > 0) { search(nil) }
+        else {
+            cancelTransfer(); apiTask?.cancel(); apiTask = nil; searchToken = UUID(); activeNavigation = nil
+            searchPage.stopLoading(); images = []; lastSearchURL = nil; lastProvider = selectedProvider
+            render("showWelcome"); message("输入关键词后搜索，或点击“图库热门”。")
+        }
+    }
+    @objc private func popular(_ sender: Any?) {
+        if category.selectedSegment == SearchCategory.pictures.rawValue { category.selectedSegment = 0; previousCategory = .stickers }
+        provider.selectItem(at: 0); order.isEnabled = true; order.selectItem(at: 1); field.stringValue = ""; search(nil)
+    }
     @objc private func retry(_ sender: Any?) { search(nil) }
-    @objc private func browser(_ sender: Any?) { if let url = lastSearchURL { NSWorkspace.shared.open(url) } else { message("先输入关键词搜索，再打开浏览器。") } }
-    @objc private func help(_ sender: Any?) { cancelTransfer(); searchToken = UUID(); activeNavigation = nil; searchPage.stopLoading(); images = []; render("showWelcome"); showWindow(nil) }
+    @objc private func browser(_ sender: Any?) {
+        guard let url = lastSearchURL else { message("先输入关键词搜索，或点击“图库热门”，再打开浏览器。"); return }
+        if lastProvider == .memecub { NSWorkspace.shared.open(URL(string: "https://memecub.com/zh")!) }
+        else { NSWorkspace.shared.open(url) }
+    }
+    @objc private func help(_ sender: Any?) { cancelTransfer(); apiTask?.cancel(); apiTask = nil; searchToken = UUID(); activeNavigation = nil; searchPage.stopLoading(); images = []; lastSearchURL = nil; render("showWelcome"); showWindow(nil) }
     @objc private func returnToFeishu(_ sender: Any?) {
         cancelTransfer()
         DraftInserter.openFeishu { [weak self] _, error in DispatchQueue.main.async {
@@ -269,13 +336,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         }
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if webView === searchPage, navigation === activeNavigation { let token = searchToken; DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.extract(attempt: 0, token: token) } }
+        if webView === searchPage, activeNavigation != nil, navigation === activeNavigation { let token = searchToken; DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.extract(attempt: 0, token: token) } }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if webView === grid {
             gridReady = true
             if let (function, value) = pendingRender { pendingRender = nil; render(function, value) }
-        } else if navigation === activeNavigation { extract(attempt: 0, token: searchToken) }
+        } else if activeNavigation != nil, navigation === activeNavigation { extract(attempt: 0, token: searchToken) }
     }
     private func failed(_ error: Error, webView: WKWebView) {
         if (error as NSError).code == NSURLErrorCancelled { return }
@@ -285,10 +352,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, WK
         } else { message("结果界面加载失败，请重新打开搜图酱。", error: true) }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if webView === grid || navigation === activeNavigation { failed(error, webView: webView) }
+        if webView === grid || (activeNavigation != nil && navigation === activeNavigation) { failed(error, webView: webView) }
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if webView === grid || navigation === activeNavigation { failed(error, webView: webView) }
+        if webView === grid || (activeNavigation != nil && navigation === activeNavigation) { failed(error, webView: webView) }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === grid { gridReady = false; webView.reload() }

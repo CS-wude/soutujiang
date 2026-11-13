@@ -11,6 +11,11 @@ func check(_ condition: @autoclosure () -> Bool, _ name: String) {
     else { failures += 1; print("FAIL \(name)") }
 }
 let keyword = "猫咪 & 摸鱼 #今天 + 100%"
+runMemeChecks()
+let visible = CGRect(x: 0, y: 40, width: 1710, height: 1000)
+check(WindowPlacement.constrained(CGRect(x: 847, y: -661, width: 1000, height: 792), to: visible) == CGRect(x: 710, y: 40, width: 1000, height: 792), "summoning an offscreen window brings the entire grid into view")
+check(WindowPlacement.constrained(CGRect(x: 100, y: 80, width: 800, height: 700), to: visible) == CGRect(x: 100, y: 80, width: 800, height: 700), "visible floating window keeps its chosen position")
+check(WindowPlacement.constrained(CGRect(x: 0, y: 0, width: 1500, height: 1000), to: CGRect(x: -1200, y: 0, width: 1200, height: 800)) == CGRect(x: -1200, y: 0, width: 1200, height: 800), "window also fits a smaller display with negative screen coordinates")
 let pasteOperation = UUID()
 let lease = PasteLease(operation: pasteOperation, clipboardChangeCount: 12)
 check(lease.permits(currentOperation: pasteOperation, currentClipboardChangeCount: 12), "current image paste lease is valid")
@@ -20,7 +25,7 @@ check(!SearchDocument.matches(URL(string: "https://cn.bing.com/images/search?q=o
 check(SearchDocument.matches(URL(string: "https://cn.bing.com/images/search?q=cat+GIF")!, requested: URL(string: "https://www.bing.com/images/search?q=cat%20GIF")!), "search redirects and form spaces preserve the intended query")
 check(PageNotice.requiresVerification(url: URL(string: "https://wappass.baidu.com/static/captcha/a.html"), title: "百度安全验证"), "verification page is reported instead of showing normal search hint")
 check(!PageNotice.requiresVerification(url: URL(string: "https://www.bing.com/images/search?q=验证"), title: "验证 图片"), "ordinary search about verification is not treated as a challenge")
-for provider in SearchProvider.allCases {
+for provider in [SearchProvider.bing, .baidu] {
     let url = SearchRequest(keyword: keyword, category: .pictures, provider: provider).url
     let items = url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
     check(items.first(where: { $0.name == (provider == .bing ? "q" : "word") })?.value == keyword,
@@ -108,6 +113,7 @@ if let folder = ProcessInfo.processInfo.environment["IMAGE_HELPER_FIXTURE_DIRECT
     try (animation as Data).write(to: directory.appendingPathComponent("test.gif"))
 }
 if let base = ProcessInfo.processInfo.environment["IMAGE_HELPER_TEST_BASE_URL"] {
+    runMemeNetworkChecks(base: base)
     for (path, shouldSucceed) in [("png", true), ("gif", true), ("redirect", true), ("html", false), ("forbidden", false), ("oversize", false)] {
         var received: Result<ImagePayload, Error>?
         let task = ImageDownloader.fetch(url: URL(string: base + "/" + path)!, referer: nil) { received = $0 }
