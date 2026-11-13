@@ -4,9 +4,11 @@ Mac 菜单栏搜图小工具。表情包、GIF、普通图片直接显示为可�
 
 技术栈：Swift、AppKit、WebKit、Carbon、macOS Accessibility、ImageIO、URLSession、NSPasteboard。无第三方运行时依赖、自建后端或数据库。
 
+**下载：** [macOS Apple Silicon 应用](https://github.com/CS-wude/soutujiang/releases/download/v1.0.0/Soutujiang-macOS-arm64.zip) · [发行说明与 SHA-256 校验](https://github.com/CS-wude/soutujiang/releases/tag/v1.0.0)
+
 ## 开始使用
 
-1. 双击 `dist/搜图酱.app`，或双击 `启动.command`。
+1. 下载并解压发行包，双击 `搜图酱.app`。源码用户先运行 `./build.command`，再打开 `dist/搜图酱.app`，或双击 `启动.command`。
 2. 在飞书里先点一下准备发图的聊天输入框。
 3. 按 **Control + Option + 空格**打开搜图酱，输入关键词并回车。
 4. 点击结果图片。已开启一键粘贴时，会返回飞书并执行粘贴；确认图片与收件人后，自行发送。
